@@ -109,14 +109,14 @@ class Level:
     def _generate_clouds(self):
         rng = random.Random(7)
         clouds = []
-        for _ in range(8):
+        for _ in range(16):  # double the clouds for more atmosphere
             cx = rng.randint(0, C.LEVEL_WIDTH)
-            cy = rng.randint(20, 220)
-            speed = rng.uniform(10, 30)
-            scale = rng.uniform(0.6, 1.2)
+            cy = rng.randint(10, 260)
+            speed = rng.uniform(8, 36)
+            scale = rng.uniform(0.5, 1.5)
             w, h = int(180 * scale), int(80 * scale)
             img = pg.transform.smoothscale(self.cloud_base, (w, h)).convert_alpha()
-            clouds.append({"x": cx, "y": cy, "speed": speed, "img": img})
+            clouds.append({"x": cx, "y": cy, "speed": speed, "img": img, "alpha": int(120 + 80 * scale)})
         return clouds
 
     def update_clouds(self, dt: float):
@@ -129,11 +129,20 @@ class Level:
         # Blit cached vertical gradient background
         surf.blit(self.bg_surface, (0, 0))
 
-        # Parallax clouds
+        # Add subtle atmospheric haze
+        haze = pg.Surface((C.WIDTH, C.HEIGHT), pg.SRCALPHA)
+        for y in range(0, C.HEIGHT, 8):
+            alpha = int(18 + 22 * (y / C.HEIGHT))
+            pg.draw.line(haze, (180, 200, 255, alpha), (0, y), (C.WIDTH, y))
+        surf.blit(haze, (0, 0))
+
+        # Parallax clouds with alpha for depth
         for c in self.clouds:
             px = int(c["x"] - cam_x * 0.4)
             py = int(c["y"])
-            surf.blit(c["img"], (px, py))
+            cloud_img = c["img"].copy()
+            cloud_img.set_alpha(c["alpha"])
+            surf.blit(cloud_img, (px, py))
 
     def _make_cloud_base(self) -> pg.Surface:
         color = (220, 235, 255, 180)

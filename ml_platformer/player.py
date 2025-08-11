@@ -164,7 +164,7 @@ class Player:
             pg.draw.circle(surf, col, (int(part["x"] - cam_x), int(part["y"])), int(part["r"]))
 
     def _emit_jump_particles(self):
-        for i in range(8):
+        for i in range(4):
             self.particles.append({
                 "x": self.rect.centerx,
                 "y": self.rect.bottom,
@@ -178,7 +178,7 @@ class Player:
     def _emit_land_particles(self, speed_x: float):
         if speed_x < 60:
             return
-        for i in range(10):
+        for i in range(5):
             self.particles.append({
                 "x": self.rect.centerx + (i - 5) * 2,
                 "y": self.rect.bottom + 1,
