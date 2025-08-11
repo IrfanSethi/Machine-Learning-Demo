@@ -129,11 +129,13 @@ class Level:
         # Blit cached vertical gradient background
         surf.blit(self.bg_surface, (0, 0))
 
-        # Add subtle atmospheric haze
+        # Add subtle atmospheric haze as a smooth vertical gradient
         haze = pg.Surface((C.WIDTH, C.HEIGHT), pg.SRCALPHA)
-        for y in range(0, C.HEIGHT, 8):
-            alpha = int(18 + 22 * (y / C.HEIGHT))
-            pg.draw.line(haze, (180, 200, 255, alpha), (0, y), (C.WIDTH, y))
+        for y in range(C.HEIGHT):
+            t = y / max(1, C.HEIGHT - 1)
+            alpha = int(10 + 38 * t)
+            color = (180, 200, 255, alpha)
+            pg.draw.line(haze, color, (0, y), (C.WIDTH, y))
         surf.blit(haze, (0, 0))
 
         # Parallax clouds with alpha for depth
