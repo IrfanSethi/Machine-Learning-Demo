@@ -132,9 +132,10 @@ def main(argv=None):
     fixed_dt_fast_default = (1.0 / target_fps) * (C.TIME_SCALE * 2.5)
     fixed_dt = fixed_dt_base
     accumulator = 0.0
-    # Track spikes cleared and pending boost
-    cleared_spikes = set()
-    pending_spike_boost = None
+    # Track spikes already awarded (across episodes) and pending boost
+    # Keyed by (layout_index, spike_idx) so each physical spike awards once per layout
+    awarded_spikes: set[tuple[int, int]] = set()
+    pending_spike_boost: tuple[int, int] | None = None
     # Ensure episode CSV has header
     _ensure_episode_csv()
 
@@ -172,6 +173,8 @@ def main(argv=None):
                 if event.key == pg.K_F1:
                     level.reset(rotate_layout=True, rotate_theme=False)
                     reset_episode(player, level)
+                    # Clear awarded spikes when layout changes to avoid cross-layout carryover
+                    awarded_spikes.clear()
                 if event.key == pg.K_F2:
                     level.reset(rotate_layout=False, rotate_theme=True)
                     reset_episode(player, level)
@@ -262,18 +265,25 @@ def main(argv=None):
             if died_to_hazard:
                 r += C.HAZARD_DEATH_PENALTY
 
-            # Detect if player crosses a spike from left to right in this frame
-            for idx, h in enumerate(level.hazards):
-                if idx not in cleared_spikes and prev_x < h.left and new_x >= h.right:
-                    pending_spike_boost = idx
-                    cleared_spikes.add(idx)
-                    break
+            # Detect if player crosses a spike from left to right in this frame.
+            # We only award the bonus once per spike (per layout) and only after landing.
+            cur_layout = getattr(level, "layout_index", 0)
+            if pending_spike_boost is None:
+                for idx, h in enumerate(level.hazards):
+                    key = (cur_layout, idx)
+                    if key in awarded_spikes:
+                        continue
+                    if prev_x < h.left and new_x >= h.right:
+                        pending_spike_boost = key
+                        break
 
             # Only give boost after landing on ground after clearing a spike
-            if pending_spike_boost is not None:
-                if player.on_ground:
-                    r += 80.0  # increased reward boost for passing spike and landing
-                    pending_spike_boost = None
+            if pending_spike_boost is not None and player.on_ground:
+                # Award once and mark as awarded
+                if pending_spike_boost not in awarded_spikes:
+                    r += 80.0  # reward boost for passing spike and landing
+                    awarded_spikes.add(pending_spike_boost)
+                pending_spike_boost = None
 
             # Learn from both AI and human play
             if training and last_state is not None:
@@ -286,7 +296,6 @@ def main(argv=None):
 
             episode_step += 1
             if reached_exit or fell or (episode_time >= C.EPISODE_MAX_TIME_SEC):
-                cleared_spikes.clear()
                 pending_spike_boost = None
                 if reached_exit:
                     if best_time is None or episode_time < best_time:
