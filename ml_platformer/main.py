@@ -1,6 +1,9 @@
 import os
 import time
 import math
+import csv
+import argparse
+from datetime import datetime
 import pygame as pg
 
 from . import config as C
@@ -11,6 +14,7 @@ from .ui import UI
 
 SAVE_PATH = os.path.join(os.path.dirname(__file__), "qtable.pkl")
 LOG_PATH = os.path.join(os.path.dirname(__file__), "completion_times.txt")
+EPISODE_LOG_PATH = os.path.join(os.path.dirname(__file__), "episode_log.csv")
 
 def compute_reward(prev_dist, new_dist, prev_x, new_x, reached_exit, fell, dt, idle_weight: float, episode_time: float, reached_timeout: bool, furthest_x_reward: float, cur_input: InputState):
     r = 0.0
@@ -41,7 +45,33 @@ def compute_reward(prev_dist, new_dist, prev_x, new_x, reached_exit, fell, dt, i
         r += C.TIMEOUT_PENALTY
     return r
 
-def main():
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(description="ML Platformer - Q-learning Demo")
+    g_mode = p.add_mutually_exclusive_group()
+    g_mode.add_argument("--ai", dest="ai_control", action="store_true", help="Start with AI control (default)")
+    g_mode.add_argument("--human", dest="ai_control", action="store_false", help="Start with human control")
+    p.set_defaults(ai_control=True)
+    g_train = p.add_mutually_exclusive_group()
+    g_train.add_argument("--train", dest="training", action="store_true", help="Enable training (default)")
+    g_train.add_argument("--no-train", dest="training", action="store_false", help="Disable Q-updates")
+    p.set_defaults(training=True)
+    p.add_argument("--episodes", type=int, default=0, help="Run for N episodes then exit (0 = infinite)")
+    p.add_argument("--seed", type=int, default=123, help="RNG seed for the agent")
+    p.add_argument("--load", action="store_true", help="Load Q-table at start if present")
+    p.add_argument("--save-on-exit", action="store_true", help="Save Q-table upon exit")
+    p.add_argument("--layout", type=int, default=None, help="Select layout index (0..2)")
+    p.add_argument("--theme", type=int, default=None, help="Select theme index (0..N-1)")
+    p.add_argument("--headless", action="store_true", help="Run without rendering (hidden window)")
+    p.add_argument("--fps", type=int, default=C.FPS, help="Target FPS for the clock")
+    p.add_argument("--speedup", type=float, default=1.0, help="Simulation speed multiplier (e.g., 3.0)")
+    return p.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    # Headless mode: prefer hidden window to avoid driver issues
+    if args.headless:
+        os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
     pg.init()
     flags = pg.DOUBLEBUF
     try:
@@ -49,9 +79,13 @@ def main():
     except Exception:
         pass
     try:
+        if args.headless and hasattr(pg, "HIDDEN"):
+            flags |= pg.HIDDEN
         screen = pg.display.set_mode((C.WIDTH, C.HEIGHT), flags, vsync=C.VSYNC)
     except TypeError:
         # Older pygame without vsync keyword
+        if args.headless and hasattr(pg, "HIDDEN"):
+            flags |= pg.HIDDEN
         screen = pg.display.set_mode((C.WIDTH, C.HEIGHT), flags)
     pg.display.set_caption("ML Platformer - Optimize for Fastest Time to Exit")
     clock = pg.time.Clock()
@@ -67,9 +101,14 @@ def main():
     except Exception:
         pass
 
-    agent = QAgent(seed=123)
-    training = True
-    ai_control = True
+    agent = QAgent(seed=args.seed)
+    training = bool(args.training)
+    ai_control = bool(args.ai_control)
+    if args.load and os.path.exists(SAVE_PATH):
+        try:
+            agent.load(SAVE_PATH)
+        except Exception:
+            pass
     best_time = None  # best episode time (seconds)
     last_reset_reason = None
     episode_idx = 1  # sequential episode counter for logging
@@ -88,24 +127,33 @@ def main():
     furthest_x = 0
 
     # Fixed-timestep simulation for stable physics
-    fixed_dt_base = (1.0 / C.FPS) * C.TIME_SCALE
-    fixed_dt_fast = (1.0 / C.FPS) * (C.TIME_SCALE * 2.5)
+    target_fps = max(1, int(args.fps))
+    fixed_dt_base = (1.0 / target_fps) * C.TIME_SCALE
+    fixed_dt_fast_default = (1.0 / target_fps) * (C.TIME_SCALE * 2.5)
     fixed_dt = fixed_dt_base
     accumulator = 0.0
     # Track spikes cleared and pending boost
     cleared_spikes = set()
     pending_spike_boost = None
+    # Ensure episode CSV has header
+    _ensure_episode_csv()
+
+    episodes_to_run = max(0, int(args.episodes))
+    episodes_completed = 0
+
     while True:
-        frame_dt = clock.tick(C.FPS) / 1000.0
+        frame_dt = clock.tick(target_fps) / 1000.0
         accumulator += frame_dt
         t = time.time() - t0
 
         # Speedup button: hold space to increase simulation speed
         keys = pg.key.get_pressed()
+        # Choose fastest of: CLI speedup, Space hold, or base
+        fixed_dt = fixed_dt_base
         if keys[pg.K_SPACE]:
-            fixed_dt = fixed_dt_fast
-        else:
-            fixed_dt = fixed_dt_base
+            fixed_dt = max(fixed_dt, fixed_dt_fast_default)
+        if args.speedup and args.speedup > 1.0:
+            fixed_dt = max(fixed_dt, (1.0 / target_fps) * (C.TIME_SCALE * float(args.speedup)))
 
         # Process events (quit/toggles/save/load)
         for event in pg.event.get():
@@ -133,6 +181,11 @@ def main():
                 if event.key == pg.K_l:
                     if os.path.exists(SAVE_PATH):
                         agent.load(SAVE_PATH)
+                if event.key == pg.K_F12:
+                    try:
+                        save_screenshot(screen)
+                    except Exception:
+                        pass
 
         # Run fixed-step updates to catch up
         ran_updates = 0
@@ -257,12 +310,32 @@ def main():
                         agent.total_reward = 0.0
                 else:
                     last_reset_reason = "timeout"
+
+                # Append rich episode CSV row
+                try:
+                    _append_episode_csv({
+                        "episode": episode_idx,
+                        "time": f"{episode_time:.4f}",
+                        "reward": f"{agent.total_reward:.4f}",
+                        "epsilon": f"{agent.epsilon:.4f}",
+                        "steps": episode_step,
+                        "reason": last_reset_reason,
+                    })
+                except Exception:
+                    pass
+
                 reset_episode(player, level)
                 episode_step = 0
                 episode_time = 0.0
                 last_state = None
                 furthest_x = 0
                 episode_idx += 1
+
+                # Respect --episodes budget
+                if episodes_to_run > 0:
+                    episodes_completed += 1
+                    if episodes_completed >= episodes_to_run:
+                        safe_quit(agent, save_on_exit=args.save_on_exit)
 
             # Camera follow
             target_cam = max(0, min(player.rect.centerx - C.WIDTH * 0.5, C.LEVEL_WIDTH - C.WIDTH))
@@ -272,10 +345,11 @@ def main():
             ran_updates += 1
 
         # Render once per frame using latest state
-        level.draw_background(screen, cam_x)
-        level.draw_platforms(screen, cam_x)
-        level.draw_exit(screen, cam_x, t)
-        player.draw(screen, cam_x, t)
+        if not args.headless:
+            level.draw_background(screen, cam_x)
+            level.draw_platforms(screen, cam_x)
+            level.draw_exit(screen, cam_x, t)
+            player.draw(screen, cam_x, t)
 
         # Prepare AI WASD indicator from the last AI input
         ai_wasd = None
@@ -288,20 +362,21 @@ def main():
                 'd': bool(last_inp.right),
             }
 
-        ui.draw(screen, {
-            "training": training,
-            "ai_control": ai_control,
-            "episodes": agent.episodes,
-            "steps": agent.steps,
-            "epsilon": agent.epsilon,
-            "reward": agent.total_reward,
-            "time": episode_time,
-            "best_time": best_time,
-            "reason": last_reset_reason,
-            "ai_wasd": ai_wasd,
-        })
+        if not args.headless:
+            ui.draw(screen, {
+                "training": training,
+                "ai_control": ai_control,
+                "episodes": agent.episodes,
+                "steps": agent.steps,
+                "epsilon": agent.epsilon,
+                "reward": agent.total_reward,
+                "time": episode_time,
+                "best_time": best_time,
+                "reason": last_reset_reason,
+                "ai_wasd": ai_wasd,
+            })
 
-        pg.display.flip()
+            pg.display.flip()
 
 def dist_to_exit(player: Player, level: Level) -> float:
     dx = level.exit_rect.centerx - player.rect.centerx
@@ -311,9 +386,42 @@ def dist_to_exit(player: Player, level: Level) -> float:
 def reset_episode(player: Player, level: Level):
     player.reset(level.spawn_x, level.spawn_y)
 
-def safe_quit(agent: QAgent):
+def save_screenshot(screen: pg.Surface, out_dir: str | None = None):
+    if out_dir is None:
+        out_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs", "images")
+    os.makedirs(out_dir, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = os.path.join(out_dir, f"screenshot-{ts}.png")
+    pg.image.save(screen, path)
+    return path
+
+
+def _ensure_episode_csv():
+    if not os.path.exists(EPISODE_LOG_PATH):
+        try:
+            with open(EPISODE_LOG_PATH, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["episode", "time", "reward", "epsilon", "steps", "reason"]) 
+        except Exception:
+            pass
+
+
+def _append_episode_csv(row: dict):
     try:
-        agent.save(SAVE_PATH)
+        with open(EPISODE_LOG_PATH, "a", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow([
+                row.get("episode"), row.get("time"), row.get("reward"),
+                row.get("epsilon"), row.get("steps"), row.get("reason")
+            ])
+    except Exception:
+        pass
+
+
+def safe_quit(agent: QAgent, save_on_exit: bool = True):
+    try:
+        if save_on_exit:
+            agent.save(SAVE_PATH)
     except Exception:
         pass
     pg.quit()

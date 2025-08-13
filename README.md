@@ -85,14 +85,28 @@ Toggles and helpers:
 - L: load Q-table from `ml_platformer/qtable.pkl`
 - F1: rotate level layout
 - F2: rotate theme
+- F12: capture screenshot to `docs/images/`
 
 Data and logs:
 - Q-table: `ml_platformer/qtable.pkl`
 - AI completion times: `ml_platformer/completion_times.txt` (CSV: episode_index,seconds)
+- Episode CSV log: `ml_platformer/episode_log.csv` with columns: `episode,time,reward,epsilon,steps,reason`
 
 Tuning:
 - Adjust physics, visuals, and reward weights in `ml_platformer/config.py`.
 - Modify discretization, epsilon schedule, and learning rates in `ml_platformer/ai_agent.py`.
+
+CLI examples:
+```powershell
+# Headless 50 episodes, fast sim, save on exit
+python -m ml_platformer.main --headless --episodes 50 --speedup 3 --save-on-exit
+
+# Human play, no training, custom seed
+python -m ml_platformer.main --human --no-train --seed 7
+
+# Start with layout 2 and theme 1 at 90 FPS
+python -m ml_platformer.main --layout 2 --theme 1 --fps 90
+```
 
 ## Technologies
 - Python 3.x

@@ -23,15 +23,18 @@ class Player:
         self.facing = 1
         self.alive = True
         self.particles = []
-        # Sprite
-        try:
-            img = pg.image.load("Sprites/Cube.png").convert_alpha()
-            self._base_sprite = img
-            scaled = pg.transform.scale(self._base_sprite, (self.rect.w, self.rect.h))
-            self.sprite = self._apply_rect_mask(scaled)
-        except Exception:
-            self._base_sprite = None
-            self.sprite = None
+        # Sprite (optional)
+        self._base_sprite = None
+        self.sprite = None
+        if getattr(C, "USE_IMAGE_SPRITE", False):
+            try:
+                img = pg.image.load("Sprites/Cube.png").convert_alpha()
+                self._base_sprite = img
+                scaled = pg.transform.smoothscale(self._base_sprite, (self.rect.w, self.rect.h))
+                self.sprite = self._apply_rect_mask(scaled)
+            except Exception:
+                self._base_sprite = None
+                self.sprite = None
         self.last_input = InputState()
 
     def reset(self, spawn_x: int, spawn_y: int):
@@ -139,31 +142,37 @@ class Player:
         self._fy = float(self.rect.y)
 
     def draw(self, surf: pg.Surface, cam_x: float, t: float):
-        # Shadow
-        shadow = pg.Rect(self.rect.x - cam_x + 4, self.rect.bottom - 8, self.rect.w, 8)
-        pg.draw.ellipse(surf, (0, 0, 0, 120), shadow)
+        # Shadow (optional)
+        if getattr(C, "DRAW_SHADOW", True):
+            shadow = pg.Rect(self.rect.x - cam_x + 4, self.rect.bottom - 8, self.rect.w, 8)
+            pg.draw.ellipse(surf, (0, 0, 0, 120), shadow)
 
         # Body (sprite if available, fallback to rect)
         body = pg.Rect(self.rect.x - cam_x, self.rect.y, self.rect.w, self.rect.h)
         if self.sprite:
             surf.blit(self.sprite, body)
         else:
-            pg.draw.rect(surf, C.PLAYER_OUTLINE, body.inflate(6, 6), border_radius=8)
+            # Programmatic clean cube to avoid sprite artifacts
+            if getattr(C, "DRAW_PLAYER_OUTLINE", True):
+                pg.draw.rect(surf, C.PLAYER_OUTLINE, body.inflate(6, 6), border_radius=8)
             pg.draw.rect(surf, C.PLAYER_COLOR, body, border_radius=8)
 
         # Face
-        if not self.sprite:
+        if not self.sprite and getattr(C, "DRAW_FACE", True):
             eye_y = body.y + 16
             eye_x = body.centerx + 6 * self.facing
             pg.draw.circle(surf, (40, 40, 40), (eye_x - cam_x, eye_y), 4)
 
         # Particles
-        for part in self.particles:
-            alpha = max(0, int(255 * part["life"]))
-            col = (*part["color"], alpha)
-            pg.draw.circle(surf, col, (int(part["x"] - cam_x), int(part["y"])), int(part["r"]))
+        if getattr(C, "DRAW_PARTICLES", True):
+            for part in self.particles:
+                alpha = max(0, int(255 * part["life"]))
+                col = (*part["color"], alpha)
+                pg.draw.circle(surf, col, (int(part["x"] - cam_x), int(part["y"])), int(part["r"]))
 
     def _emit_jump_particles(self):
+        if not getattr(C, "DRAW_PARTICLES", True):
+            return
         for i in range(4):
             self.particles.append({
                 "x": self.rect.centerx,
@@ -176,7 +185,7 @@ class Player:
             })
 
     def _emit_land_particles(self, speed_x: float):
-        if speed_x < 60:
+        if speed_x < 60 or not getattr(C, "DRAW_PARTICLES", True):
             return
         for i in range(5):
             self.particles.append({
@@ -190,6 +199,9 @@ class Player:
             })
 
     def _update_particles(self, dt: float):
+        if not getattr(C, "DRAW_PARTICLES", True):
+            self.particles.clear()
+            return
         alive = []
         for p in self.particles:
             p["x"] += p["vx"] * dt
@@ -202,13 +214,15 @@ class Player:
         self.particles = alive
 
     def _apply_rect_mask(self, surf: pg.Surface) -> pg.Surface:
-        # Clip sprite strictly to a rounded rectangle to hide any stray edge pixels
+        # Simple, robust rounded-rect mask to keep edges clean
         w, h = surf.get_width(), surf.get_height()
-        out = surf.copy()
+        out = pg.Surface((w, h), pg.SRCALPHA)
+        # Draw base cube as clean background
+        pg.draw.rect(out, (255, 255, 255, 255), pg.Rect(0, 0, w, h), border_radius=6)
+        # Composite sprite on top using min alpha to avoid dark edge bleed
+        tmp = surf.copy()
         mask = pg.Surface((w, h), pg.SRCALPHA)
-        mask.fill((255, 255, 255, 0))
-        # Slight rounding for a softer look; set to 0 for perfect square edges
-        rr = 4
-        pg.draw.rect(mask, (255, 255, 255, 255), pg.Rect(0, 0, w, h), border_radius=rr)
-        out.blit(mask, (0, 0), special_flags=pg.BLEND_RGBA_MULT)
+        pg.draw.rect(mask, (255, 255, 255, 255), pg.Rect(0, 0, w, h), border_radius=6)
+        tmp.blit(mask, (0, 0), special_flags=pg.BLEND_RGBA_MULT)
+        out.blit(tmp, (0, 0))
         return out

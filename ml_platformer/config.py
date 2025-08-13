@@ -74,5 +74,14 @@ CAMERA_LERP = 0.1
 LEVEL_WIDTH = 3200
 LEVEL_HEIGHT = HEIGHT
 
+# Sprites
+# If False, the player is drawn programmatically (no external PNG), which avoids
+# any stray edge pixels/artifacts from image scaling.
+USE_IMAGE_SPRITE = True
+DRAW_FACE = False
+DRAW_PLAYER_OUTLINE = False
+DRAW_SHADOW = False
+DRAW_PARTICLES = False
+
 def ease_in_out_sine(t: float) -> float:
     return -(math.cos(math.pi * t) - 1) / 2
