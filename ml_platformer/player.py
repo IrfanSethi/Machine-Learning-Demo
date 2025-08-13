@@ -63,11 +63,19 @@ class Player:
             ax += C.MOVE_ACCEL
             self.facing = 1
 
-        # Apply friction when no input
+        # Apply friction and braking
         if ax == 0.0:
+            # no input: regular friction
             self.vel.x -= self.vel.x * min(C.FRICTION * dt, 1.0)
         else:
+            # input present
+            # if input opposes current velocity, apply stronger braking
+            if (self.vel.x > 0 and ax < 0) or (self.vel.x < 0 and ax > 0):
+                self.vel.x -= self.vel.x * min(C.FRICTION * C.BRAKE_MULT * dt, 1.0)
             self.vel.x += ax * dt
+        # Small velocity snap-to-zero to prevent lingering drift
+        if abs(self.vel.x) < getattr(C, "STOP_EPS", 0.0):
+            self.vel.x = 0.0
 
         # Clamp horizontal speed
         if self.vel.x > C.MAX_SPEED_X:

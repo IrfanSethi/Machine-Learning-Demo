@@ -16,6 +16,8 @@ FRICTION = 8.0
 JUMP_VELOCITY = -750.0  # px/s
 PLAYER_W = 40
 PLAYER_H = 40
+BRAKE_MULT = 2.2  # extra friction multiplier when reversing direction
+STOP_EPS = 8.0    # snap horizontal speed to 0 when below this magnitude
 
 # AI
 ACTIONS = [
